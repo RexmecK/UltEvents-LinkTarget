@@ -92,6 +92,16 @@ namespace UltEvents
                 else
                     _Method = declaringType.GetMethod(methodName, UltEventUtils.AnyAccessBindings, null, parameters, null);
 
+                //Dynamic CastTo generic here
+                if(_Method  == Casts.CastTo_methodinfo)
+                {
+                    var typecast = Type.GetType(PersistentArguments[0]._String);
+                    if (typecast != null)
+                    {
+                        _Method = Casts.Casted_methodinfo.MakeGenericMethod(typecast);
+                    }
+                }
+
                 return _Method;
             }
         }
