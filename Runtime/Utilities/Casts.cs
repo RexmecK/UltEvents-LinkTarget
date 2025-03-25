@@ -11,7 +11,7 @@ namespace UltEvents
         public static object CastTo(string type, object value)
             => value;
         
-        public static T Casted<T>(string type, T value)
-            => value;
+        public static T Casted<T>(string type, object value)
+            => (T)value;
     }
 }
