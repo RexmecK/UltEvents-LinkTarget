@@ -28,6 +28,16 @@ namespace UltEvents
         /// <summary>The object on which the persistent method is called.</summary>
         public Object Target => _Target;
 
+        /// <summary>The linked state on which the persistent method is called.</summary>
+        [SerializeField]
+        private int _Linked;
+        public int Linked => _Linked;
+
+        /// <summary>The linked target on which the persistent method is called.</summary>
+        [SerializeField]
+        private int _LinkedTarget;
+        public int LinkedTarget => _LinkedTarget;
+
         /************************************************************************************************************************/
 
         /// <summary>The character used at the end of a <see cref="MemberName"/> to refer to a field.</summary>
@@ -148,6 +158,60 @@ namespace UltEvents
             catch { return null; }
         }
 
+        /// <summary>Gets the <see cref="Member"/> and blocks any exceptions (which causes it to return null).</summary>
+        internal MemberInfo GetMemberWithMember(MemberInfo target)
+        {
+            try { return GetMemberWithType(target.GetReturnType()); }
+            catch { return null; }
+        }
+
+        /// <summary>Gets the <see cref="Member"/> and blocks any exceptions (which causes it to return null).</summary>
+        internal MemberInfo GetMemberWithType(Type target)
+        {
+            try {
+                if(IsField)
+                {
+                    if (_Field != null)
+                        return _Field;
+
+                    var declaringType = target;
+                    var fieldName = _MemberName;
+                    if (declaringType == null || string.IsNullOrEmpty(fieldName))
+                        return null;
+
+                    fieldName = fieldName[..^1];// Remove the FieldNameSuffix.
+                    _Field = declaringType.GetField(fieldName, UltEventUtils.AnyAccessBindings);
+
+                    return _Field;
+                }
+                else
+                {
+                    if (_Method != null)
+                        return _Method;
+
+                    var declaringType = target;
+                    var methodName = _MemberName;
+                    if (declaringType == null || string.IsNullOrEmpty(methodName))
+                        return null;
+
+                    var argumentCount = _PersistentArguments.Length;
+                    var parameters = ArrayCache<Type>.GetTempArray(argumentCount);
+                    for (int i = 0; i < argumentCount; i++)
+                    {
+                        parameters[i] = _PersistentArguments[i].SystemType;
+                    }
+
+                    if (methodName == "ctor")
+                        _Method = declaringType.GetConstructor(UltEventUtils.AnyAccessBindings, null, parameters, null);
+                    else
+                        _Method = declaringType.GetMethod(methodName, UltEventUtils.AnyAccessBindings, null, parameters, null);
+
+                    return _Method;
+                }
+            }
+            catch { return null; }
+        }
+
         /// <summary>Gets the <see cref="Method"/> return type or <see cref="Field"/> type if <see cref="IsGetter"/>.</summary>
         internal Type GetReturnType()
         {
@@ -155,6 +219,11 @@ namespace UltEvents
                 IsGetter ? Field.FieldType : null :
                 GetMethodSafe()?.GetReturnType();
         }
+
+        //internal Type GetReturnTypeWithMemberInfo(MemberInfo info)
+        //{
+        //    return  GetMemberFromMemberInfo(info)?.GetReturnType();
+        //}
 
         /************************************************************************************************************************/
 #if UNITY_EDITOR
@@ -213,6 +282,9 @@ namespace UltEvents
                 {
                     _MemberName = UltEventUtils.GetFullyQualifiedName(method);
                     _Target = null;
+                    //reset link state when a static/constructor method is set
+                    _Linked = 0;
+                    _LinkedTarget = 0;
                 }
                 else _MemberName = method.Name;
 
@@ -299,6 +371,9 @@ namespace UltEvents
             {
                 _MemberName = UltEventUtils.GetFullyQualifiedName(field);
                 _Target = null;
+                //reset link state when a static field is set
+                _Linked = 0;
+                _LinkedTarget = 0;
             }
             else _MemberName = field.Name;
 
@@ -344,6 +419,15 @@ namespace UltEvents
         /// </summary>
         public object Invoke()
         {
+            object target = _Target;
+            //Target linking starts here
+            if(_Target == null && _Linked!=0)
+            {
+                if(_Linked==1)
+                    target = UltEventBase.GetReturnedValue(_LinkedTarget);
+                else
+                    target = UltEventBase.GetParameterValue(_LinkedTarget);
+            }
             // Field.
             if (IsField)
             {
@@ -355,9 +439,9 @@ namespace UltEvents
                 }
 
                 if (IsGetter)
-                    return field.GetValue(_Target);
+                    return field.GetValue(target);
 
-                field.SetValue(_Target, _PersistentArguments[0].Value);
+                field.SetValue(target, _PersistentArguments[0].Value);
 
                 UltEventBase.UpdateLinkedValueOffsets();
                 return null;
@@ -387,7 +471,7 @@ namespace UltEvents
             if (method.IsConstructor)
                 return ((ConstructorInfo)method).Invoke(parameters);
 
-            return method.Invoke(_Target, parameters);
+            return method.Invoke(target, parameters);
         }
 
         /************************************************************************************************************************/
@@ -458,12 +542,22 @@ namespace UltEvents
                 _Target = UnityEditor.EditorUtility.InstanceIDToObject(_Target.GetInstanceID());
 #endif
 
+            if (_Target == null && _Linked!=0)
+            {
+                if(_Linked==1)
+                    GetMemberDetails(_MemberName, UltEventBase.GetReturnedValue(_LinkedTarget), out declaringType, out memberName);
+                else
+                    GetMemberDetails(_MemberName, UltEventBase.GetParameterValue(_LinkedTarget), out declaringType, out memberName);
+            }
+            else
+            {
             GetMemberDetails(_MemberName, _Target, out declaringType, out memberName);
+            }
         }
 
         internal static void GetMemberDetails(
             string serializedMemberName,
-            Object target,
+            object target,
             out Type declaringType,
             out string memberName)
         {
@@ -539,6 +633,8 @@ namespace UltEvents
         public void CopyFrom(PersistentCall target)
         {
             _Target = target._Target;
+            _Linked = target._Linked;
+            _LinkedTarget = target._LinkedTarget;
             _MemberName = target._MemberName;
             _Method = target._Method;
             _Field = target._Field;
@@ -567,6 +663,10 @@ namespace UltEvents
             text.Append(_MemberName);
             text.Append(", Target=");
             text.Append(_Target != null ? _Target.ToString() : "null");
+            text.Append(", Linked=");
+            text.Append(_Linked);
+            text.Append(", _LinkedTarget=");
+            text.Append(_LinkedTarget);
             text.Append(", PersistentArguments=");
             UltEventUtils.AppendDeepToString(text, _PersistentArguments.GetEnumerator(), "\n        ");
         }

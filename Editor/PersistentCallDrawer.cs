@@ -36,6 +36,8 @@ namespace UltEvents.Editor
 
         public static readonly Color
             ErrorFieldColor = new(1, 0.65f, 0.65f);
+        public static readonly Color
+            LinkedFieldColor = new(0.65f, 0.85f, 1.0f);
 
         /************************************************************************************************************************/
 
@@ -67,7 +69,8 @@ namespace UltEvents.Editor
                     return LineHeight;
             }
 
-            if (DrawerState.GetCall(callProperty).GetMemberSafe() == null)
+            //todo: linked target validation
+            if (DrawerState.GetCall(callProperty).GetMemberSafe() == null && DrawerState.GetLinkedTargetProperty(callProperty).intValue < 0)
                 return LineHeight;
 
             callProperty = DrawerState.GetPersistentArgumentsProperty(callProperty);
@@ -111,12 +114,21 @@ namespace UltEvents.Editor
 
                 area.height = LineHeight;
                 area.width *= 0.35f;
+                //make space for link target
+                area.xMax -= SpecialModeToggleWidth;
 
                 DoTargetFieldGUI(
                     area,
                     DrawerState.Current.TargetProperty,
+                    DrawerState.Current.LinkedProperty,
+                    DrawerState.Current.LinkedTargetProperty,
                     DrawerState.Current.MemberNameProperty,
                     out var autoOpenMemberMenu);
+
+                area.xMax += SpecialModeToggleWidth;
+
+                //add Link target button
+                DoLinkTargetToggleGUI(area, DrawerState.Current.CallProperty, DrawerState.Current.TargetProperty, DrawerState.Current.LinkedProperty, DrawerState.Current.LinkedTargetProperty);
 
                 // Member Name Dropdown.
 
@@ -124,9 +136,27 @@ namespace UltEvents.Editor
                     DrawerState.Current.PersistentArgumentsProperty.hasMultipleDifferentValues ||
                     DrawerState.Current.MemberNameProperty.hasMultipleDifferentValues;
 
-                var member = EditorGUI.showMixedValue
-                    ? null
-                    : DrawerState.Current.call.GetMemberSafe();
+                MemberInfo member = null;
+                if(EditorGUI.showMixedValue)
+                {
+                    member = null;
+                }
+                else if(DrawerState.Current.call.Linked!=0)
+                {
+                    // validates if linked targets are calling a valid method
+                    if(DrawerState.Current.call.Linked==1)
+                    {
+                        member = DrawerState.Current.call.GetMemberWithType(DrawerState.Current.GetPreviousCall(DrawerState.Current.LinkedTargetProperty.intValue)?.GetReturnType());
+                    }
+                    else
+                    {
+                        member = DrawerState.Current.call.GetMemberWithType(DrawerState.Current.Event.GetParameterType(DrawerState.Current.LinkedTargetProperty.intValue));
+                    }
+                }
+                else
+                {
+                    member = DrawerState.Current.call.GetMemberSafe();
+                }
 
                 area.x += area.width + EditorGUIUtility.standardVerticalSpacing;
                 area.xMax = xMax;
@@ -252,16 +282,18 @@ namespace UltEvents.Editor
         private static void DoTargetFieldGUI(
             Rect area,
             SerializedProperty targetProperty,
+            SerializedProperty linkedProperty,
+            SerializedProperty linkedTargetProperty,
             SerializedProperty memberNameProperty,
             out bool autoOpenMemberMenu)
         {
             autoOpenMemberMenu = false;
 
             // Type field for a static type.
-            if (targetProperty.objectReferenceValue == null &&
+            if ((targetProperty.objectReferenceValue == null || linkedProperty.intValue!=0) &&
                 !targetProperty.hasMultipleDifferentValues)
             {
-                DoTargetTypeFieldGUI(area, targetProperty, memberNameProperty, ref autoOpenMemberMenu);
+                DoTargetTypeFieldGUI(area, targetProperty, linkedProperty, linkedTargetProperty, memberNameProperty, ref autoOpenMemberMenu);
             }
             else// Object field for an object reference.
             {
@@ -274,6 +306,8 @@ namespace UltEvents.Editor
         private static void DoTargetTypeFieldGUI(
             Rect area,
             SerializedProperty targetProperty,
+            SerializedProperty linkedProperty,
+            SerializedProperty linkedTargetProperty,
             SerializedProperty memberNameProperty,
             ref bool autoOpenMemberMenu)
         {
@@ -293,35 +327,89 @@ namespace UltEvents.Editor
             if (Type.GetType(typeName) == null)
                 GUI.color = ErrorFieldColor;
 
-            PickerMenu.DrawTypeField(
-                area,
-                memberNameProperty,
-                typeName,
-                BoolPref.ShowFullTypeNames,
-                TypePickerButtonStyle,
-                ref _TypeFieldState,
-                GetSuportedTypes,
-                setValue: (property, type) =>
-                {
-                    if (type == null)
-                    {
-                        property.stringValue = "";
+            if(targetProperty.objectReferenceValue == null && linkedProperty.intValue!=0)
+            {
+                GUIContent TypeFieldContent = new();
+                if(linkedProperty.intValue==1)
+                    TypeFieldContent.text = "Return " + linkedTargetProperty.intValue;
+                else
+                    TypeFieldContent.text = "Parameter " + linkedTargetProperty.intValue;
 
-                        Serialization.ForEachTarget(targetProperty, target =>
+                TypeFieldContent.tooltip = "";
+
+                GUI.color = LinkedFieldColor;
+                if (GUI.Button(area, TypeFieldContent, TypePickerButtonStyle))
+                {
+                    var menu = new GenericMenu();
+                    menu.AddDisabledItem(new($"Link to Return or Parameter"));
+
+                    //parameters
+                    var parameterCount = DrawerState.Current.Event.ParameterCount;
+                    for (int i = 0; i < parameterCount; i++)
+                    {
+                        var content = new GUIContent(
+                            $"Parameter {i}");
+
+                        var on = i == linkedTargetProperty.intValue && linkedProperty.intValue == 2;
+
+                        var index = i;
+                        menu.AddItem(content, on, () =>
                         {
-                            target.objectReferenceValue = target.serializedObject.targetObject;
+                            linkedProperty.intValue = 2;
+                            linkedTargetProperty.intValue = index;
+                            linkedTargetProperty.serializedObject.ApplyModifiedProperties();
                         });
                     }
-                    else
-                    {
-                        property.stringValue = $"{type.AssemblyQualifiedName}.{methodName}";
-                    }
-                },
-                onOpenMenu: () =>
-                {
-                    targetProperty = targetProperty.Copy();
-                });
 
+                    //returned
+                    for (int i = 0; i < DrawerState.Current.PreviousCallCount; i++)
+                    {
+                        var content = new GUIContent(
+                            $"Return {i}");
+
+                        var on = i == linkedTargetProperty.intValue && linkedProperty.intValue == 1;
+                        var index = i;
+                        menu.AddItem(content, on, () =>
+                        {
+                            linkedProperty.intValue = 1;
+                            linkedTargetProperty.intValue = index;
+                            linkedTargetProperty.serializedObject.ApplyModifiedProperties();
+                        });
+                    }
+                    menu.DropDown(area);
+                }
+            }
+            else
+            {
+                PickerMenu.DrawTypeField(
+                    area,
+                    memberNameProperty,
+                    typeName,
+                    BoolPref.ShowFullTypeNames,
+                    TypePickerButtonStyle,
+                    ref _TypeFieldState,
+                    GetSuportedTypes,
+                    setValue: (property, type) =>
+                    {
+                        if (type == null)
+                        {
+                            property.stringValue = "";
+
+                            Serialization.ForEachTarget(targetProperty, target =>
+                            {
+                                target.objectReferenceValue = target.serializedObject.targetObject;
+                            });
+                        }
+                        else
+                        {
+                            property.stringValue = $"{type.AssemblyQualifiedName}.{methodName}";
+                        }
+                    },
+                    onOpenMenu: () =>
+                    {
+                        targetProperty = targetProperty.Copy();
+                    });
+            }
             HandleTargetFieldDragAndDrop(area, ref autoOpenMemberMenu);
 
             GUI.color = color;
@@ -488,6 +576,9 @@ namespace UltEvents.Editor
                                 dragging[0],
                                 out autoOpenMethodMenu);
 
+                            // reset linked target state since we dragged in a normal reference object
+                            DrawerState.Current.LinkedProperty.intValue = 0;
+                            DrawerState.Current.LinkedTargetProperty.intValue = 0;
                             DragAndDrop.AcceptDrag();
                             GUI.changed = true;
                         }
@@ -559,13 +650,33 @@ namespace UltEvents.Editor
                 {
                     var methodName = DrawerState.Current.MemberNameProperty.stringValue;
 
+                    Type declaringType;
+
+                    //render method names for linked targets
+                    if(DrawerState.Current.TargetProperty.objectReferenceValue == null && DrawerState.Current.LinkedProperty.intValue!=0)
+                    {
+                        if(DrawerState.Current.LinkedProperty.intValue==1)
+                        {
+                            declaringType = DrawerState.Current.GetPreviousCall(DrawerState.Current.LinkedTargetProperty.intValue)?.GetReturnType();
+                            label = DrawerState.Current.MemberNameProperty.stringValue;
+                        }
+                        else
+                        {
+                            declaringType = DrawerState.Current.Event.GetParameterType(DrawerState.Current.LinkedTargetProperty.intValue)?.GetReturnType();
+                            label = DrawerState.Current.MemberNameProperty.stringValue;
+                        }
+                    }
+                    else
+                    {
+
                     PersistentCall.GetMemberDetails(
                         methodName,
                         DrawerState.Current.TargetProperty.objectReferenceValue,
-                        out var declaringType,
+                        out declaringType,
                         out label);
 
                     DoMethodNameSuggestionGUI(ref area, declaringType, methodName);
+                    }
 
                     GUI.color = ErrorFieldColor;
                 }
@@ -796,6 +907,53 @@ namespace UltEvents.Editor
             {
                 call?.SetMethod(methodInfo, DrawerState.Current.TargetProperty.objectReferenceValue);
             }, "Set Method");
+        }
+
+        /************************************************************************************************************************/
+        
+        private static readonly GUIContent
+            LinkToggleContent = new("∞", "Link to Target");
+        private static GUIStyle _LinkToggleStyle;
+        private const float
+            SpecialModeToggleWidth = 18;
+
+        private static void DoLinkTargetToggleGUI(Rect area, 
+            SerializedProperty callProperty,
+            SerializedProperty targetProperty,
+            SerializedProperty linkedProperty,
+            SerializedProperty linkedTargetProperty)
+        {
+            _LinkToggleStyle ??= new GUIStyle(EditorStyles.miniButton)
+            {
+                padding = new RectOffset(0, -1, 0, 1),
+                fontSize = 12,
+            };
+
+            area.x = area.width + 6;
+            area.width = SpecialModeToggleWidth - 2;
+
+            var wasLink = linkedProperty.intValue!=0 && targetProperty.objectReferenceValue == null;
+
+            if (wasLink != GUI.Toggle(area, wasLink, LinkToggleContent, _LinkToggleStyle))
+            {
+                callProperty.ModifyValues<PersistentCall>((call) =>
+                {
+                    if (wasLink)// Unlink.
+                    {
+                        targetProperty.objectReferenceValue = null;
+                        linkedProperty.intValue = 0;
+                        linkedTargetProperty.intValue = 0;
+                        targetProperty.serializedObject.ApplyModifiedProperties();
+                    }
+                    else// Link.
+                    {
+                        targetProperty.objectReferenceValue = null;
+                        linkedProperty.intValue = 1;
+                        linkedTargetProperty.intValue = 0;
+                        targetProperty.serializedObject.ApplyModifiedProperties();
+                    }
+                }, wasLink ? "Unlink Target" : "Link Target");
+            }
         }
 
         /************************************************************************************************************************/

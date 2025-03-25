@@ -33,6 +33,12 @@ namespace UltEvents.Editor
         /// <summary>The <see cref="SerializedProperty"/> for the target of the call currently being drawn.</summary>
         public SerializedProperty TargetProperty { get; private set; }
 
+        /// <summary>The <see cref="SerializedProperty"/> for the linked state of the call currently being drawn.</summary>
+        public SerializedProperty LinkedProperty { get; private set; }
+
+        /// <summary>The <see cref="SerializedProperty"/> for the linked target of the call currently being drawn.</summary>
+        public SerializedProperty LinkedTargetProperty { get; private set; }
+
         /// <summary>The <see cref="SerializedProperty"/> for the method name of the call currently being drawn.</summary>
         public SerializedProperty MemberNameProperty { get; private set; }
 
@@ -123,6 +129,8 @@ namespace UltEvents.Editor
             CallProperty = callProperty;
 
             TargetProperty = GetTargetProperty(callProperty);
+            LinkedProperty = GetLinkedProperty(callProperty);
+            LinkedTargetProperty = GetLinkedTargetProperty(callProperty);
             MemberNameProperty = GetMemberNameProperty(callProperty);
             PersistentArgumentsProperty = GetPersistentArgumentsProperty(callProperty);
 
@@ -143,6 +151,14 @@ namespace UltEvents.Editor
         /// <summary>Returns the property encapsulating the <see cref="PersistentCall.Target"/>.</summary>
         public static SerializedProperty GetTargetProperty(SerializedProperty callProperty)
             => callProperty.FindPropertyRelative(Names.PersistentCall.Target);
+
+        /// <summary>Returns the property encapsulating the <see cref="PersistentCall.Linked"/>.</summary>
+        public static SerializedProperty GetLinkedProperty(SerializedProperty callProperty)
+            => callProperty.FindPropertyRelative(Names.PersistentCall.Linked);
+
+        /// <summary>Returns the property encapsulating the <see cref="PersistentCall.LinkedTarget"/>.</summary>
+        public static SerializedProperty GetLinkedTargetProperty(SerializedProperty callProperty)
+            => callProperty.FindPropertyRelative(Names.PersistentCall.LinkedTarget);
 
         /// <summary>Returns the property encapsulating the <see cref="PersistentCall.MethodName"/>.</summary>
         public static SerializedProperty GetMemberNameProperty(SerializedProperty callProperty)
@@ -169,7 +185,29 @@ namespace UltEvents.Editor
                 return;
 
             for (int i = 0; i < Event._PersistentCalls.Count; i++)
-                PersistentMemberCache.Add(Event._PersistentCalls[i]?.GetMemberSafe());
+            {
+                //cache linked targets returns for possible argument linking
+                var persistentcall = Event._PersistentCalls[i];
+                if(persistentcall.Target == null && persistentcall.Linked!=0)
+                {
+                    if(persistentcall.Linked==1 && persistentcall.LinkedTarget < i)
+                    {
+                        PersistentMemberCache.Add(persistentcall?.GetMemberWithMember(PersistentMemberCache[persistentcall.LinkedTarget])); 
+                    } 
+                    else if (persistentcall.Linked==2 && persistentcall.LinkedTarget < Event.ParameterCount)
+                    {
+                        PersistentMemberCache.Add(persistentcall?.GetMemberWithType(Event.GetParameterType(persistentcall.LinkedTarget))); 
+                    }
+                    else
+                    {
+                        PersistentMemberCache.Add(null);
+                    }
+                }
+                else
+                {
+                    PersistentMemberCache.Add(Event._PersistentCalls[i]?.GetMemberSafe()); 
+                }
+            }
         }
 
         /************************************************************************************************************************/
@@ -265,7 +303,33 @@ namespace UltEvents.Editor
                 // Return Values.
                 for (int i = 0; i < PreviousCalls.Count; i++)
                 {
-                    var returnType = PreviousCalls[i].GetReturnType();
+                    Type returnType = null;
+                    // make argument linking possible for linked targets returns else returntype null if invalid
+                    var call = PreviousCalls[i];
+                    if(call.Linked!=0)
+                    {
+                        if(call.Linked==1)
+                        {
+                            returnType = call.GetMemberWithMember(PersistentMemberCache[call.LinkedTarget]).GetReturnType();
+                            linkIndex = i;
+                            linkType = PersistentArgumentType.ReturnValue;
+                        }
+                        else if(parameterCount > 0 && call.Linked==2)
+                        {
+                            returnType = call.GetMemberWithType(Event.GetParameterType(call.LinkedTarget)).GetReturnType();
+                            linkIndex = i;
+                            linkType = PersistentArgumentType.Parameter;
+                        }
+                        else
+                        {
+                            returnType = null;
+                        }
+                    }
+                    else
+                    {
+                        returnType = call.GetReturnType();
+                    }
+
                     if (returnType == null)
                         continue;
 

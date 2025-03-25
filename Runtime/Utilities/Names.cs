@@ -37,6 +37,8 @@ namespace UltEvents
         {
             public const string
                 Target = "_Target",
+                Linked = "_Linked",
+                LinkedTarget = "_LinkedTarget",
                 MemberName = "_MemberName",
                 PersistentArguments = "_PersistentArguments";
         }

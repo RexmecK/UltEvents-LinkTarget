@@ -66,6 +66,17 @@ namespace UltEvents.Editor
 
             // Populate the main contents of the menu.
             {
+                //create seperate menu for linked targets since they can be runtime objects instead of serialized objects
+                if(targets == null && DrawerState.Current.LinkedProperty.intValue!=0)
+                {
+                    if(DrawerState.Current.LinkedProperty.intValue == 1)
+                        PopulateMenuWithMembers(DrawerState.Current.GetPreviousCall(DrawerState.Current.LinkedTargetProperty.intValue).GetReturnType(), _Bindings, "", new Object[1]{ null });
+                    else
+                        PopulateMenuWithMembers(DrawerState.Current.Event.GetParameterType(DrawerState.Current.LinkedTargetProperty.intValue), _Bindings, "", new Object[1]{ null });
+                }
+                else
+                {
+
                 if (targets == null)
                 {
                     var serializedMethodName = CachedState.MemberNameProperty.stringValue;
@@ -103,6 +114,8 @@ namespace UltEvents.Editor
                     PopulateMenuForComponent(targets);
                 else
                     PopulateMenuForObject(targets);
+                
+                }
             }
 
             ShowMenu:
